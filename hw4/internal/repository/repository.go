@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/pepecloud/go-homeworks/hw4/internal/model"
 )
@@ -13,6 +14,7 @@ type Entity interface {
 type Repository struct {
 	orders       []model.Order
 	transactions []model.Transaction
+	mu           sync.RWMutex
 }
 
 func NewRepository() *Repository {
@@ -23,6 +25,9 @@ func NewRepository() *Repository {
 }
 
 func (r *Repository) AddEntity(entity interface{}) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	switch v := entity.(type) {
 	case model.Order:
 		r.orders = append(r.orders, v)
@@ -37,9 +42,13 @@ func (r *Repository) AddEntity(entity interface{}) {
 
 // Методы для получения данных
 func (r *Repository) GetOrders() []model.Order {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.orders
 }
 
 func (r *Repository) GetTransactions() []model.Transaction {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.transactions
 }
