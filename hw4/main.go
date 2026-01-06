@@ -1,8 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/pepecloud/go-homeworks/hw4/internal/repository"
@@ -10,38 +14,53 @@ import (
 )
 
 func main() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
 	repo := repository.NewRepository()
 
-	// Канал для передачи данных от генератора к потребителю
 	dataCh := make(chan interface{}, 10)
 
-	// Используем WaitGroup, чтобы дождаться обработки всех данных
+	// Используем WaitGroup, чтобы дождаться завершения всех горутин
 	var wg sync.WaitGroup
-	wg.Add(1)
+	wg.Add(3)
 
-	// 1. Запускаем функцию-потребителя (Consumer) в горутине
-	// Она будет читать из канала, пока он не закроется
 	go func() {
 		defer wg.Done()
-		service.ConsumeEntities(repo, dataCh)
+		service.ConsumeEntities(ctx, repo, dataCh)
 	}()
 
-	// 2. Запускаем логгер в горутине
-	// Он работает независимо с интервалом 200мс
-	go service.RunLogger(repo)
-
-	// 3. Запускаем функцию-генератора (Producer) в горутине
 	go func() {
-		service.GenerateEntities(dataCh)
-		// После отправки всех данных закрываем канал
-		close(dataCh)
+		defer wg.Done()
+		service.RunLogger(ctx, repo)
 	}()
 
-	// Ждем, пока Consumer обработает все сообщения и выйдет из цикла (после закрытия канала)
-	wg.Wait()
+	go func() {
+		defer wg.Done()
+		defer close(dataCh)
+		service.GenerateEntities(ctx, dataCh)
+	}()
 
-	// Небольшая пауза, чтобы логгер успел дописать последние изменения, если они были только что добавлены
-	time.Sleep(300 * time.Millisecond)
+	<-sigChan
+	fmt.Println("\n[MAIN] Получен сигнал завершения, начинаем graceful shutdown...")
+
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		fmt.Println("[MAIN] Все горутины завершены корректно")
+	case <-time.After(5 * time.Second):
+		fmt.Println("[MAIN] Таймаут ожидания завершения горутин")
+	}
 
 	// Вывод итоговое содержимое репозитория
 	fmt.Println("\n=== Итого в репозитории ===")
