@@ -21,10 +21,12 @@ func main() {
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	repo := repository.NewRepository()
+	if err := repo.LoadData(); err != nil {
+		fmt.Printf("Ошибка загрузки данных: %v\n", err)
+	}
 
 	dataCh := make(chan interface{}, 10)
 
-	// Используем WaitGroup, чтобы дождаться завершения всех горутин
 	var wg sync.WaitGroup
 	wg.Add(3)
 
@@ -62,7 +64,6 @@ func main() {
 		fmt.Println("[MAIN] Таймаут ожидания завершения горутин")
 	}
 
-	// Вывод итоговое содержимое репозитория
 	fmt.Println("\n=== Итого в репозитории ===")
 	fmt.Printf("Всего заказов: %d\n", len(repo.GetOrders()))
 	fmt.Printf("Всего транзакций: %d\n", len(repo.GetTransactions()))

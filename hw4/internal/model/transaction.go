@@ -71,3 +71,15 @@ func (t *Transaction) NewDate(NewDate string) {
 
 	t.date = NewDate
 }
+
+func (t *Transaction) GetID() int {
+	return t.id
+}
+
+func (t *Transaction) GetAmount() int {
+	return t.amount
+}
+
+func (t *Transaction) GetDate() string {
+	return t.date
+}

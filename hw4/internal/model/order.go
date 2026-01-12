@@ -63,3 +63,15 @@ func (o *Order) ChangeAmount(NewAmount int) {
 
 	o.amount = NewAmount
 }
+
+func (o *Order) GetID() int {
+	return o.id
+}
+
+func (o *Order) GetStatus() bool {
+	return o.status
+}
+
+func (o *Order) GetAmount() int {
+	return o.amount
+}

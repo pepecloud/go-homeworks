@@ -116,7 +116,6 @@ func RunLogger(ctx context.Context, repo *repository.Repository) {
 			currentTxCount := len(transactions)
 
 			if currentTxCount > prevTxCount {
-				// Есть новые транзакции
 				newTransactions := transactions[prevTxCount:]
 				for _, t := range newTransactions {
 					fmt.Printf("[LOGGER] Новая транзакция: %+v\n", t)
