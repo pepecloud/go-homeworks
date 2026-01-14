@@ -93,7 +93,12 @@ func RunLogger(ctx context.Context, repo *repository.Repository) {
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 
-	var prevOrderCount, prevTxCount int
+	// Логгер будет выводить только те сущности, которые появились после запуска.
+	orders := repo.GetOrders()
+	transactions := repo.GetTransactions()
+
+	prevOrderCount := len(orders)
+	prevTxCount := len(transactions)
 
 	for {
 		select {
@@ -101,7 +106,7 @@ func RunLogger(ctx context.Context, repo *repository.Repository) {
 			fmt.Println("[LOGGER] Получен сигнал завершения, останавливаем логгер")
 			return
 		case <-ticker.C:
-			orders := repo.GetOrders()
+			orders = repo.GetOrders()
 			currentOrderCount := len(orders)
 
 			if currentOrderCount > prevOrderCount {
@@ -112,7 +117,7 @@ func RunLogger(ctx context.Context, repo *repository.Repository) {
 				prevOrderCount = currentOrderCount
 			}
 
-			transactions := repo.GetTransactions()
+			transactions = repo.GetTransactions()
 			currentTxCount := len(transactions)
 
 			if currentTxCount > prevTxCount {
