@@ -61,6 +61,131 @@ func (r *Repository) GetTransactions() []model.Transaction {
 	return r.transactions
 }
 
+func (r *Repository) GetOrderByID(id int) *model.Order {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := range r.orders {
+		if r.orders[i].GetID() == id {
+			return &r.orders[i]
+		}
+	}
+	return nil
+}
+
+func (r *Repository) GetTransactionByID(id int) *model.Transaction {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := range r.transactions {
+		if r.transactions[i].GetID() == id {
+			return &r.transactions[i]
+		}
+	}
+	return nil
+}
+
+func (r *Repository) UpdateOrder(id int, order model.Order) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.orders {
+		if r.orders[i].GetID() == id {
+			r.orders[i] = order
+			return r.saveAllOrdersToCSV()
+		}
+	}
+	return fmt.Errorf("заказ с id %d не найден", id)
+}
+
+func (r *Repository) UpdateTransaction(id int, tx model.Transaction) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.transactions {
+		if r.transactions[i].GetID() == id {
+			r.transactions[i] = tx
+			return r.saveAllTransactionsToCSV()
+		}
+	}
+	return fmt.Errorf("транзакция с id %d не найдена", id)
+}
+
+func (r *Repository) DeleteOrder(id int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.orders {
+		if r.orders[i].GetID() == id {
+			r.orders = append(r.orders[:i], r.orders[i+1:]...)
+			return r.saveAllOrdersToCSV()
+		}
+	}
+	return fmt.Errorf("заказ с id %d не найден", id)
+}
+
+func (r *Repository) DeleteTransaction(id int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.transactions {
+		if r.transactions[i].GetID() == id {
+			r.transactions = append(r.transactions[:i], r.transactions[i+1:]...)
+			return r.saveAllTransactionsToCSV()
+		}
+	}
+	return fmt.Errorf("транзакция с id %d не найдена", id)
+}
+
+func (r *Repository) saveAllOrdersToCSV() error {
+	file, err := os.Create(r.ordersFile)
+	if err != nil {
+		return fmt.Errorf("ошибка создания файла orders.csv: %v", err)
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	writer.Write([]string{"id", "status", "amount"})
+
+	for _, order := range r.orders {
+		statusStr := "false"
+		if order.GetStatus() {
+			statusStr = "true"
+		}
+
+		writer.Write([]string{
+			strconv.Itoa(order.GetID()),
+			statusStr,
+			strconv.Itoa(order.GetAmount()),
+		})
+	}
+
+	return nil
+}
+
+func (r *Repository) saveAllTransactionsToCSV() error {
+	file, err := os.Create(r.txFile)
+	if err != nil {
+		return fmt.Errorf("ошибка создания файла transactions.csv: %v", err)
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	writer.Write([]string{"id", "amount", "date"})
+
+	for _, tx := range r.transactions {
+		writer.Write([]string{
+			strconv.Itoa(tx.GetID()),
+			strconv.Itoa(tx.GetAmount()),
+			tx.GetDate(),
+		})
+	}
+
+	return nil
+}
+
 func (r *Repository) saveOrderToCSV(order model.Order) {
 	fileExists := true
 	if _, err := os.Stat(r.ordersFile); os.IsNotExist(err) {
