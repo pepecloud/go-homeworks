@@ -12,12 +12,17 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/joho/godotenv"
+	_ "github.com/pepecloud/go-homeworks/hw4/docs"
 	"github.com/pepecloud/go-homeworks/hw4/internal/handlers"
 	"github.com/pepecloud/go-homeworks/hw4/internal/repository"
 	"github.com/pepecloud/go-homeworks/hw4/internal/service"
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 func main() {
+	_ = godotenv.Load()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -29,16 +34,17 @@ func main() {
 		fmt.Printf("Ошибка загрузки данных: %v\n", err)
 	}
 
-	// Настройка веб-сервера
 	h := handlers.NewHandlers(repo)
 	router := mux.NewRouter()
 
-	// Универсальные маршруты для всех сущностей
+	router.HandleFunc("/api/login", h.Login).Methods("POST")
 	router.HandleFunc("/api/item", h.CreateItem).Methods("POST")
 	router.HandleFunc("/api/item/{id}", h.UpdateItem).Methods("PUT")
 	router.HandleFunc("/api/items", h.GetItems).Methods("GET")
 	router.HandleFunc("/api/item/{id}", h.GetItem).Methods("GET")
 	router.HandleFunc("/api/item/{id}", h.DeleteItem).Methods("DELETE")
+
+	router.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)
 
 	server := &http.Server{
 		Addr:    ":8080",

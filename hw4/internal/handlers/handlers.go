@@ -18,10 +18,10 @@ func NewHandlers(repo *repository.Repository) *Handlers {
 	return &Handlers{repo: repo}
 }
 
-// Универсальные handlers для /api/item
-
 func (h *Handlers) CreateItem(w http.ResponseWriter, r *http.Request) {
-	// Пытаемся определить тип сущности по JSON
+	if !h.checkAuth(w, r) {
+		return
+	}
 	var raw map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		http.Error(w, "Неверный формат JSON: "+err.Error(), http.StatusBadRequest)
@@ -177,6 +177,9 @@ func (h *Handlers) createTransactionFromMap(w http.ResponseWriter, raw map[strin
 }
 
 func (h *Handlers) UpdateItem(w http.ResponseWriter, r *http.Request) {
+	if !h.checkAuth(w, r) {
+		return
+	}
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 	id, err := strconv.Atoi(idStr)
@@ -411,6 +414,9 @@ func (h *Handlers) GetItem(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handlers) DeleteItem(w http.ResponseWriter, r *http.Request) {
+	if !h.checkAuth(w, r) {
+		return
+	}
 	vars := mux.Vars(r)
 	idStr := vars["id"]
 	id, err := strconv.Atoi(idStr)
@@ -418,8 +424,6 @@ func (h *Handlers) DeleteItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Неверный формат ID", http.StatusBadRequest)
 		return
 	}
-
-	// Пытаемся удалить сначала Order, потом Transaction
 	if err := h.repo.DeleteOrder(id); err == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
