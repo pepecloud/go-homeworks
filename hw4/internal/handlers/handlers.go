@@ -18,6 +18,20 @@ func NewHandlers(repo *repository.Repository) *Handlers {
 	return &Handlers{repo: repo}
 }
 
+// CreateItem создаёт заказ или транзакцию по телу запроса (тип по полю date).
+// CreateItem godoc
+// @Summary      Создать сущность
+// @Description  Создаёт Order или Transaction по JSON. Если есть поле "date" — транзакция, иначе заказ. Требуется JWT.
+// @Tags         items
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        body  body  object  true  "Order: id, status, amount. Transaction: id, amount, date"
+// @Success      201   {object}  object
+// @Failure      400   {object}  object
+// @Failure      401   {object}  object  "Требуется авторизация"
+// @Failure      409   {object}  object  "Сущность с таким ID уже есть"
+// @Router       /api/item [post]
 func (h *Handlers) CreateItem(w http.ResponseWriter, r *http.Request) {
 	if !h.checkAuth(w, r) {
 		return
@@ -176,6 +190,21 @@ func (h *Handlers) createTransactionFromMap(w http.ResponseWriter, raw map[strin
 	json.NewEncoder(w).Encode(dto)
 }
 
+// UpdateItem обновляет заказ или транзакцию по id в пути.
+// UpdateItem godoc
+// @Summary      Обновить сущность
+// @Description  Обновляет Order или Transaction по id. Тело — как при создании. Требуется JWT.
+// @Tags         items
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Param        id    path      int     true  "ID сущности"
+// @Param        body  body      object  true  "Order: id, status, amount. Transaction: id, amount, date"
+// @Success      200   {object}  object
+// @Failure      400   {object}  object
+// @Failure      401   {object}  object  "Требуется авторизация"
+// @Failure      404   {object}  object
+// @Router       /api/item/{id} [put]
 func (h *Handlers) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	if !h.checkAuth(w, r) {
 		return
@@ -351,6 +380,14 @@ func (h *Handlers) updateTransactionFromMap(w http.ResponseWriter, id int, raw m
 	json.NewEncoder(w).Encode(dto)
 }
 
+// GetItems возвращает все заказы и транзакции одним списком.
+// GetItems godoc
+// @Summary      Список сущностей
+// @Description  Возвращает все Order и Transaction в одном массиве.
+// @Tags         items
+// @Produce      json
+// @Success      200   {array}   object
+// @Router       /api/items [get]
 func (h *Handlers) GetItems(w http.ResponseWriter, r *http.Request) {
 	orders := h.repo.GetOrders()
 	transactions := h.repo.GetTransactions()
@@ -378,6 +415,17 @@ func (h *Handlers) GetItems(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(items)
 }
 
+// GetItem возвращает одну сущность по id (заказ или транзакция).
+// GetItem godoc
+// @Summary      Получить сущность по ID
+// @Description  Ищет Order или Transaction по id в пути.
+// @Tags         items
+// @Produce      json
+// @Param        id   path      int  true  "ID сущности"
+// @Success      200  {object}  object
+// @Failure      400  {object}  object
+// @Failure      404  {object}  object
+// @Router       /api/item/{id} [get]
 func (h *Handlers) GetItem(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	idStr := vars["id"]
@@ -413,6 +461,18 @@ func (h *Handlers) GetItem(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "Сущность не найдена", http.StatusNotFound)
 }
 
+// DeleteItem удаляет заказ или транзакцию по id. Требуется JWT.
+// DeleteItem godoc
+// @Summary      Удалить сущность
+// @Description  Удаляет Order или Transaction по id в пути. Требуется авторизация.
+// @Tags         items
+// @Security     BearerAuth
+// @Param        id   path  int  true  "ID сущности"
+// @Success      204
+// @Failure      400  {object}  object
+// @Failure      401  {object}  object  "Требуется авторизация"
+// @Failure      404  {object}  object
+// @Router       /api/item/{id} [delete]
 func (h *Handlers) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	if !h.checkAuth(w, r) {
 		return

@@ -60,6 +60,17 @@ func (h *Handlers) checkAuth(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
+// Login godoc
+// @Summary      Вход в API
+// @Description  Проверяет логин и пароль, при успехе возвращает JWT для заголовка Authorization.
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        body  body  LoginRequest  true  "Логин и пароль"
+// @Success      200   {object}  LoginResponse
+// @Failure      400   {object}  object  "Неверный запрос"
+// @Failure      401   {object}  object  "Неверные логин или пароль"
+// @Router       /api/login [post]
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	expectedLogin := os.Getenv("API_LOGIN")
 	expectedPassword := os.Getenv("API_PASSWORD")
@@ -80,7 +91,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "неверный JSON: " + err.Error()})
+		json.NewEncoder(w).Encode(map[string]string{"error": "неверный JSON"})
 		return
 	}
 	if req.Login != expectedLogin || req.Password != expectedPassword {

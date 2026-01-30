@@ -1,3 +1,13 @@
+// API заказов и транзакций: CRUD по /api/item, авторизация по JWT.
+//
+//	@title          Items API
+//	@version        1.0
+//	@description    CRUD для заказов и транзакций. Мутирующие запросы требуют JWT (получить через POST /api/login).
+//	@host           localhost:8080
+//	@BasePath       /
+//	@securityDefinitions.apikey  BearerAuth
+//	@in   header
+//	@name Authorization
 package main
 
 import (
