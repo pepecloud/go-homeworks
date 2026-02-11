@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package items.v1;
+
+import "google/protobuf/empty.proto";
+
+option go_package = "github.com/pepecloud/go-homeworks/hw4/internal/grpc/pb;pb";
+
+// Order представляет заказ.
+message Order {
+  int32 id = 1;
+  bool status = 2;
+  int32 amount = 3;
+}
+
+// Transaction представляет транзакцию.
+message Transaction {
+  int32 id = 1;
+  int32 amount = 2;
+  string date = 3;
+}
+
+// Запрос на логин.
+message LoginRequest {
+  string login = 1;
+  string password = 2;
+}
+
+// Ответ с JWT.
+message LoginResponse {
+  string token = 1;
+}
+
+// Запрос по ID заказа.
+message OrderIdRequest {
+  int32 id = 1;
+}
+
+// Запрос по ID транзакции.
+message TransactionIdRequest {
+  int32 id = 1;
+}
+
+// Запрос на создание заказа.
+message CreateOrderRequest {
+  Order order = 1;
+}
+
+// Запрос на обновление заказа.
+message UpdateOrderRequest {
+  Order order = 1;
+}
+
+// Запрос на удаление заказа.
+message DeleteOrderRequest {
+  int32 id = 1;
+}
+
+// Ответ с одним заказом.
+message GetOrderResponse {
+  Order order = 1;
+}
+
+// Запрос на список заказов.
+message ListOrdersRequest {}
+
+// Ответ со списком заказов.
+message ListOrdersResponse {
+  repeated Order orders = 1;
+}
+
+// Аналогичные сообщения для транзакций.
+message CreateTransactionRequest {
+  Transaction transaction = 1;
+}
+
+message UpdateTransactionRequest {
+  Transaction transaction = 1;
+}
+
+message DeleteTransactionRequest {
+  int32 id = 1;
+}
+
+message GetTransactionResponse {
+  Transaction transaction = 1;
+}
+
+message ListTransactionsRequest {}
+
+message ListTransactionsResponse {
+  repeated Transaction transactions = 1;
+}
+
+// AuthService отвечает за получение JWT.
+service AuthService {
+  rpc Login(LoginRequest) returns (LoginResponse);
+}
+
+// OrderService предоставляет CRUD по заказам.
+service OrderService {
+  rpc CreateOrder(CreateOrderRequest) returns (GetOrderResponse);
+  rpc UpdateOrder(UpdateOrderRequest) returns (GetOrderResponse);
+  rpc DeleteOrder(DeleteOrderRequest) returns (google.protobuf.Empty);
+  rpc GetOrder(OrderIdRequest) returns (GetOrderResponse);
+  rpc ListOrders(ListOrdersRequest) returns (ListOrdersResponse);
+}
+
+// TransactionService предоставляет CRUD по транзакциям.
+service TransactionService {
+  rpc CreateTransaction(CreateTransactionRequest) returns (GetTransactionResponse);
+  rpc UpdateTransaction(UpdateTransactionRequest) returns (GetTransactionResponse);
+  rpc DeleteTransaction(DeleteTransactionRequest) returns (google.protobuf.Empty);
+  rpc GetTransaction(TransactionIdRequest) returns (GetTransactionResponse);
+  rpc ListTransactions(ListTransactionsRequest) returns (ListTransactionsResponse);
+}
+

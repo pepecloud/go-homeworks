@@ -24,6 +24,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 	_ "github.com/pepecloud/go-homeworks/hw4/docs"
+	"github.com/pepecloud/go-homeworks/hw4/internal/grpc"
 	"github.com/pepecloud/go-homeworks/hw4/internal/handlers"
 	"github.com/pepecloud/go-homeworks/hw4/internal/repository"
 	"github.com/pepecloud/go-homeworks/hw4/internal/service"
@@ -69,6 +70,15 @@ func main() {
 		fmt.Println("Веб-сервер запущен на http://localhost:8080")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("Ошибка веб-сервера: %v\n", err)
+		}
+	}()
+
+	// Запуск gRPC-сервера в отдельной горутине
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := grpc.StartGRPCServer(ctx, repo, ":9090"); err != nil {
+			log.Printf("Ошибка gRPC-сервера: %v\n", err)
 		}
 	}()
 
