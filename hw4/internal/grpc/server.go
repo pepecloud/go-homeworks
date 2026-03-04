@@ -10,8 +10,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/pepecloud/go-homeworks/hw4/internal/grpc/pb"
-	"github.com/pepecloud/go-homeworks/hw4/internal/model"
-	"github.com/pepecloud/go-homeworks/hw4/internal/repository"
+	"github.com/pepecloud/go-homeworks/hw4/internal/usecase"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -32,23 +31,23 @@ type Server struct {
 	pb.UnimplementedOrderServiceServer
 	pb.UnimplementedTransactionServiceServer
 
-	repo *repository.Repository
+	items *usecase.Service
 }
 
-// NewServer создаёт gRPC-сервер поверх репозитория.
-func NewServer(repo *repository.Repository) *Server {
-	return &Server{repo: repo}
+// NewServer создаёт gRPC-сервер поверх usecase.
+func NewServer(items *usecase.Service) *Server {
+	return &Server{items: items}
 }
 
 // StartGRPCServer поднимает gRPC-сервер на указанном адресе.
-func StartGRPCServer(ctx context.Context, repo *repository.Repository, addr string) error {
+func StartGRPCServer(ctx context.Context, items *usecase.Service, addr string) error {
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("не удалось открыть порт для gRPC: %w", err)
 	}
 
 	s := grpc.NewServer()
-	srv := NewServer(repo)
+	srv := NewServer(items)
 
 	pb.RegisterAuthServiceServer(s, srv)
 	pb.RegisterOrderServiceServer(s, srv)
@@ -119,16 +118,14 @@ func (s *Server) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*
 		return nil, status.Error(codes.InvalidArgument, "amount должен быть больше 0")
 	}
 
-	if existing := s.repo.GetOrderByID(int(o.Id)); existing != nil {
-		return nil, status.Error(codes.AlreadyExists, "заказ с таким ID уже существует")
+	if _, err := s.items.CreateOrder(int(o.Id), o.Status, int(o.Amount)); err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrOrderExists):
+			return nil, status.Error(codes.AlreadyExists, err.Error())
+		default:
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 	}
-
-	order := model.NewOrder(int(o.Id), o.Status, int(o.Amount))
-	if order.GetID() != int(o.Id) {
-		return nil, status.Error(codes.InvalidArgument, "ошибка создания заказа: невалидные данные")
-	}
-
-	s.repo.AddEntity(order)
 
 	return &pb.GetOrderResponse{
 		Order: &pb.Order{
@@ -151,28 +148,28 @@ func (s *Server) UpdateOrder(ctx context.Context, req *pb.UpdateOrderRequest) (*
 		return nil, status.Error(codes.InvalidArgument, "amount должен быть больше 0")
 	}
 
-	order := model.NewOrder(int(o.Id), o.Status, int(o.Amount))
-	if order.GetID() != int(o.Id) {
-		return nil, status.Error(codes.InvalidArgument, "ошибка создания заказа: невалидные данные")
-	}
-
-	if err := s.repo.UpdateOrder(int(o.Id), order); err != nil {
-		return nil, status.Error(codes.NotFound, err.Error())
+	if _, err := s.items.UpdateOrder(int(o.Id), int(o.Id), o.Status, int(o.Amount)); err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrEntityNotFound):
+			return nil, status.Error(codes.NotFound, err.Error())
+		default:
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 	}
 
 	return &pb.GetOrderResponse{Order: o}, nil
 }
 
 func (s *Server) DeleteOrder(ctx context.Context, req *pb.DeleteOrderRequest) (*emptypb.Empty, error) {
-	if err := s.repo.DeleteOrder(int(req.GetId())); err != nil {
+	if err := s.items.DeleteOrder(int(req.GetId())); err != nil {
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 	return &emptypb.Empty{}, nil
 }
 
 func (s *Server) GetOrder(ctx context.Context, req *pb.OrderIdRequest) (*pb.GetOrderResponse, error) {
-	order := s.repo.GetOrderByID(int(req.GetId()))
-	if order == nil {
+	order, err := s.items.GetOrder(int(req.GetId()))
+	if err != nil {
 		return nil, status.Error(codes.NotFound, "заказ не найден")
 	}
 	return &pb.GetOrderResponse{
@@ -185,7 +182,7 @@ func (s *Server) GetOrder(ctx context.Context, req *pb.OrderIdRequest) (*pb.GetO
 }
 
 func (s *Server) ListOrders(ctx context.Context, _ *pb.ListOrdersRequest) (*pb.ListOrdersResponse, error) {
-	orders := s.repo.GetOrders()
+	orders, _ := s.items.ListItems()
 	resp := &pb.ListOrdersResponse{
 		Orders: make([]*pb.Order, 0, len(orders)),
 	}
@@ -216,16 +213,14 @@ func (s *Server) CreateTransaction(ctx context.Context, req *pb.CreateTransactio
 		return nil, status.Error(codes.InvalidArgument, "date обязателен для заполнения")
 	}
 
-	if existing := s.repo.GetTransactionByID(int(t.Id)); existing != nil {
-		return nil, status.Error(codes.AlreadyExists, "транзакция с таким ID уже существует")
+	if _, err := s.items.CreateTransaction(int(t.Id), int(t.Amount), t.Date); err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrTransactionExists):
+			return nil, status.Error(codes.AlreadyExists, err.Error())
+		default:
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 	}
-
-	tx := model.NewTransaction(int(t.Id), int(t.Amount), t.Date)
-	if tx.GetID() != int(t.Id) {
-		return nil, status.Error(codes.InvalidArgument, "ошибка создания транзакции: невалидные данные")
-	}
-
-	s.repo.AddEntity(tx)
 
 	return &pb.GetTransactionResponse{
 		Transaction: &pb.Transaction{
@@ -251,28 +246,28 @@ func (s *Server) UpdateTransaction(ctx context.Context, req *pb.UpdateTransactio
 		return nil, status.Error(codes.InvalidArgument, "date обязателен для заполнения")
 	}
 
-	tx := model.NewTransaction(int(t.Id), int(t.Amount), t.Date)
-	if tx.GetID() != int(t.Id) {
-		return nil, status.Error(codes.InvalidArgument, "ошибка создания транзакции: невалидные данные")
-	}
-
-	if err := s.repo.UpdateTransaction(int(t.Id), tx); err != nil {
-		return nil, status.Error(codes.NotFound, err.Error())
+	if _, err := s.items.UpdateTransaction(int(t.Id), int(t.Id), int(t.Amount), t.Date); err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrEntityNotFound):
+			return nil, status.Error(codes.NotFound, err.Error())
+		default:
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 	}
 
 	return &pb.GetTransactionResponse{Transaction: t}, nil
 }
 
 func (s *Server) DeleteTransaction(ctx context.Context, req *pb.DeleteTransactionRequest) (*emptypb.Empty, error) {
-	if err := s.repo.DeleteTransaction(int(req.GetId())); err != nil {
+	if err := s.items.DeleteTransaction(int(req.GetId())); err != nil {
 		return nil, status.Error(codes.NotFound, err.Error())
 	}
 	return &emptypb.Empty{}, nil
 }
 
 func (s *Server) GetTransaction(ctx context.Context, req *pb.TransactionIdRequest) (*pb.GetTransactionResponse, error) {
-	tx := s.repo.GetTransactionByID(int(req.GetId()))
-	if tx == nil {
+	tx, err := s.items.GetTransaction(int(req.GetId()))
+	if err != nil {
 		return nil, status.Error(codes.NotFound, "транзакция не найдена")
 	}
 	return &pb.GetTransactionResponse{
@@ -285,7 +280,7 @@ func (s *Server) GetTransaction(ctx context.Context, req *pb.TransactionIdReques
 }
 
 func (s *Server) ListTransactions(ctx context.Context, _ *pb.ListTransactionsRequest) (*pb.ListTransactionsResponse, error) {
-	txs := s.repo.GetTransactions()
+	_, txs := s.items.ListItems()
 	resp := &pb.ListTransactionsResponse{
 		Transactions: make([]*pb.Transaction, 0, len(txs)),
 	}
@@ -298,4 +293,3 @@ func (s *Server) ListTransactions(ctx context.Context, _ *pb.ListTransactionsReq
 	}
 	return resp, nil
 }
-

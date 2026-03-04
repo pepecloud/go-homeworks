@@ -28,6 +28,7 @@ import (
 	"github.com/pepecloud/go-homeworks/hw4/internal/handlers"
 	"github.com/pepecloud/go-homeworks/hw4/internal/repository"
 	"github.com/pepecloud/go-homeworks/hw4/internal/service"
+	"github.com/pepecloud/go-homeworks/hw4/internal/usecase"
 	httpSwagger "github.com/swaggo/http-swagger"
 )
 
@@ -45,7 +46,8 @@ func main() {
 		fmt.Printf("Ошибка загрузки данных: %v\n", err)
 	}
 
-	h := handlers.NewHandlers(repo)
+	itemsUsecase := usecase.New(repo)
+	h := handlers.NewHandlers(itemsUsecase)
 	router := mux.NewRouter()
 
 	router.HandleFunc("/api/login", h.Login).Methods("POST")
@@ -77,7 +79,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := grpc.StartGRPCServer(ctx, repo, ":9090"); err != nil {
+		if err := grpc.StartGRPCServer(ctx, itemsUsecase, ":9090"); err != nil {
 			log.Printf("Ошибка gRPC-сервера: %v\n", err)
 		}
 	}()

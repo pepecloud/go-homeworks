@@ -2,20 +2,20 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/gorilla/mux"
-	"github.com/pepecloud/go-homeworks/hw4/internal/model"
-	"github.com/pepecloud/go-homeworks/hw4/internal/repository"
+	"github.com/pepecloud/go-homeworks/hw4/internal/usecase"
 )
 
 type Handlers struct {
-	repo *repository.Repository
+	items *usecase.Service
 }
 
-func NewHandlers(repo *repository.Repository) *Handlers {
-	return &Handlers{repo: repo}
+func NewHandlers(items *usecase.Service) *Handlers {
+	return &Handlers{items: items}
 }
 
 // CreateItem создаёт заказ или транзакцию по телу запроса (тип по полю date).
@@ -99,19 +99,15 @@ func (h *Handlers) createOrderFromMap(w http.ResponseWriter, raw map[string]inte
 		return
 	}
 
-	// Проверяем, не существует ли уже заказ с таким ID
-	if existing := h.repo.GetOrderByID(dto.ID); existing != nil {
-		http.Error(w, "Заказ с таким ID уже существует", http.StatusConflict)
+	if _, err := h.items.CreateOrder(dto.ID, dto.Status, dto.Amount); err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrOrderExists):
+			http.Error(w, "Заказ с таким ID уже существует", http.StatusConflict)
+		default:
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
 		return
 	}
-
-	order := model.NewOrder(dto.ID, dto.Status, dto.Amount)
-	if order.GetID() != dto.ID {
-		http.Error(w, "Ошибка создания заказа: невалидные данные", http.StatusBadRequest)
-		return
-	}
-
-	h.repo.AddEntity(order)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -171,19 +167,15 @@ func (h *Handlers) createTransactionFromMap(w http.ResponseWriter, raw map[strin
 		return
 	}
 
-	// Проверяем, не существует ли уже транзакция с таким ID
-	if existing := h.repo.GetTransactionByID(dto.ID); existing != nil {
-		http.Error(w, "Транзакция с таким ID уже существует", http.StatusConflict)
+	if _, err := h.items.CreateTransaction(dto.ID, dto.Amount, dto.Date); err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrTransactionExists):
+			http.Error(w, "Транзакция с таким ID уже существует", http.StatusConflict)
+		default:
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
 		return
 	}
-
-	tx := model.NewTransaction(dto.ID, dto.Amount, dto.Date)
-	if tx.GetID() != dto.ID {
-		http.Error(w, "Ошибка создания транзакции: невалидные данные", http.StatusBadRequest)
-		return
-	}
-
-	h.repo.AddEntity(tx)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -225,8 +217,8 @@ func (h *Handlers) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Проверяем, существует ли Order или Transaction с таким ID
-	order := h.repo.GetOrderByID(id)
-	tx := h.repo.GetTransactionByID(id)
+	order, _ := h.items.GetOrder(id)
+	tx, _ := h.items.GetTransaction(id)
 
 	if order != nil {
 		h.updateOrderFromMap(w, id, raw)
@@ -292,14 +284,13 @@ func (h *Handlers) updateOrderFromMap(w http.ResponseWriter, id int, raw map[str
 		return
 	}
 
-	order := model.NewOrder(dto.ID, dto.Status, dto.Amount)
-	if order.GetID() != dto.ID {
-		http.Error(w, "Ошибка создания заказа: невалидные данные", http.StatusBadRequest)
-		return
-	}
-
-	if err := h.repo.UpdateOrder(id, order); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	if _, err := h.items.UpdateOrder(id, dto.ID, dto.Status, dto.Amount); err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrEntityNotFound):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		default:
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
 		return
 	}
 
@@ -365,14 +356,13 @@ func (h *Handlers) updateTransactionFromMap(w http.ResponseWriter, id int, raw m
 		return
 	}
 
-	tx := model.NewTransaction(dto.ID, dto.Amount, dto.Date)
-	if tx.GetID() != dto.ID {
-		http.Error(w, "Ошибка создания транзакции: невалидные данные", http.StatusBadRequest)
-		return
-	}
-
-	if err := h.repo.UpdateTransaction(id, tx); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	if _, err := h.items.UpdateTransaction(id, dto.ID, dto.Amount, dto.Date); err != nil {
+		switch {
+		case errors.Is(err, usecase.ErrEntityNotFound):
+			http.Error(w, err.Error(), http.StatusNotFound)
+		default:
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		}
 		return
 	}
 
@@ -389,8 +379,7 @@ func (h *Handlers) updateTransactionFromMap(w http.ResponseWriter, id int, raw m
 // @Success      200   {array}   object
 // @Router       /api/items [get]
 func (h *Handlers) GetItems(w http.ResponseWriter, r *http.Request) {
-	orders := h.repo.GetOrders()
-	transactions := h.repo.GetTransactions()
+	orders, transactions := h.items.ListItems()
 
 	// Объединяем все сущности в один массив
 	items := make([]interface{}, 0, len(orders)+len(transactions))
@@ -436,7 +425,7 @@ func (h *Handlers) GetItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Проверяем сначала Order, потом Transaction
-	if order := h.repo.GetOrderByID(id); order != nil {
+	if order, _ := h.items.GetOrder(id); order != nil {
 		dto := OrderDTO{
 			ID:     order.GetID(),
 			Status: order.GetStatus(),
@@ -447,7 +436,7 @@ func (h *Handlers) GetItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if tx := h.repo.GetTransactionByID(id); tx != nil {
+	if tx, _ := h.items.GetTransaction(id); tx != nil {
 		dto := TransactionDTO{
 			ID:     tx.GetID(),
 			Amount: tx.GetAmount(),
@@ -484,12 +473,7 @@ func (h *Handlers) DeleteItem(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Неверный формат ID", http.StatusBadRequest)
 		return
 	}
-	if err := h.repo.DeleteOrder(id); err == nil {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	if err := h.repo.DeleteTransaction(id); err == nil {
+	if err := h.items.DeleteItem(id); err == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
