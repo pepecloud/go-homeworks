@@ -83,7 +83,9 @@ func ConsumeEntities(ctx context.Context, repo *repository.Repository, ch <-chan
 				fmt.Println("[CONSUMER] Канал закрыт, завершаем обработку")
 				return
 			}
-			repo.AddEntity(entity)
+			if err := repo.AddEntity(entity); err != nil {
+				fmt.Printf("[CONSUMER] Ошибка сохранения сущности: %v\n", err)
+			}
 		}
 	}
 }

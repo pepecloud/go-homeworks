@@ -41,7 +41,18 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	repo := repository.NewRepository()
+	repo, err := repository.NewRepository(ctx)
+	if err != nil {
+		log.Fatalf("Ошибка инициализации репозитория: %v", err)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		if err := repo.Close(closeCtx); err != nil {
+			log.Printf("Ошибка закрытия репозитория: %v\n", err)
+		}
+	}()
+
 	if err := repo.LoadData(); err != nil {
 		fmt.Printf("Ошибка загрузки данных: %v\n", err)
 	}

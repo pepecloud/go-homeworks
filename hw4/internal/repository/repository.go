@@ -1,64 +1,171 @@
 package repository
 
 import (
-	"encoding/csv"
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/pepecloud/go-homeworks/hw4/internal/model"
+	"github.com/redis/go-redis/v9"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-type Entity interface {
-	GetID() int
+const (
+	defaultMongoURI   = "mongodb://localhost:27017"
+	defaultMongoDB    = "itemsdb"
+	defaultRedisAddr  = "localhost:6379"
+	defaultHistoryTTL = 24 * time.Hour
+	opTimeout         = 5 * time.Second
+)
+
+type orderDoc struct {
+	ID     int  `bson:"id"`
+	Status bool `bson:"status"`
+	Amount int  `bson:"amount"`
+}
+
+type transactionDoc struct {
+	ID     int    `bson:"id"`
+	Amount int    `bson:"amount"`
+	Date   string `bson:"date"`
+}
+
+type historyRecord struct {
+	EntityType string      `json:"entity_type"`
+	Action     string      `json:"action"`
+	EntityID   int         `json:"entity_id"`
+	Payload    interface{} `json:"payload"`
+	Timestamp  string      `json:"timestamp"`
 }
 
 type Repository struct {
 	orders       []model.Order
 	transactions []model.Transaction
 	mu           sync.RWMutex
-	ordersFile   string
-	txFile       string
+
+	mongoClient *mongo.Client
+	ordersColl  *mongo.Collection
+	txColl      *mongo.Collection
+
+	redisClient *redis.Client
+	historyTTL  time.Duration
 }
 
-func NewRepository() *Repository {
-	return &Repository{
+func NewRepository(ctx context.Context) (*Repository, error) {
+	mongoURI := getenv("MONGO_URI", defaultMongoURI)
+	mongoDB := getenv("MONGO_DB", defaultMongoDB)
+
+	mongoCtx, mongoCancel := context.WithTimeout(ctx, opTimeout)
+	defer mongoCancel()
+
+	mongoClient, err := mongo.Connect(mongoCtx, options.Client().ApplyURI(mongoURI))
+	if err != nil {
+		return nil, fmt.Errorf("ошибка подключения к MongoDB: %w", err)
+	}
+
+	if err := mongoClient.Ping(mongoCtx, nil); err != nil {
+		return nil, fmt.Errorf("ошибка ping MongoDB: %w", err)
+	}
+
+	redisDB, err := strconv.Atoi(getenv("REDIS_DB", "0"))
+	if err != nil {
+		redisDB = 0
+	}
+
+	redisClient := redis.NewClient(&redis.Options{
+		Addr:     getenv("REDIS_ADDR", defaultRedisAddr),
+		Password: os.Getenv("REDIS_PASSWORD"),
+		DB:       redisDB,
+	})
+	if err := redisClient.Ping(mongoCtx).Err(); err != nil {
+		return nil, fmt.Errorf("ошибка подключения к Redis: %w", err)
+	}
+
+	repo := &Repository{
 		orders:       []model.Order{},
 		transactions: []model.Transaction{},
-		ordersFile:   "orders.csv",
-		txFile:       "transactions.csv",
+		mongoClient:  mongoClient,
+		ordersColl:   mongoClient.Database(mongoDB).Collection("orders"),
+		txColl:       mongoClient.Database(mongoDB).Collection("transactions"),
+		redisClient:  redisClient,
+		historyTTL:   getHistoryTTL(),
 	}
+
+	if err := repo.ensureIndexes(mongoCtx); err != nil {
+		return nil, err
+	}
+
+	return repo, nil
 }
 
-func (r *Repository) AddEntity(entity interface{}) {
+func (r *Repository) Close(ctx context.Context) error {
+	var resultErr error
+
+	if r.redisClient != nil {
+		if err := r.redisClient.Close(); err != nil {
+			resultErr = fmt.Errorf("ошибка закрытия Redis: %w", err)
+		}
+	}
+
+	if r.mongoClient != nil {
+		if err := r.mongoClient.Disconnect(ctx); err != nil && resultErr == nil {
+			resultErr = fmt.Errorf("ошибка закрытия MongoDB: %w", err)
+		}
+	}
+
+	return resultErr
+}
+
+func (r *Repository) AddEntity(entity interface{}) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	switch v := entity.(type) {
 	case model.Order:
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		defer cancel()
+		if _, err := r.ordersColl.InsertOne(ctx, orderFromModel(v)); err != nil {
+			return err
+		}
 		r.orders = append(r.orders, v)
-		r.saveOrderToCSV(v)
+		if err := r.logChange(ctx, "order", "create", v.GetID(), orderFromModel(v)); err != nil {
+			return err
+		}
 		fmt.Println("Добавлен Order")
 	case model.Transaction:
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		defer cancel()
+		if _, err := r.txColl.InsertOne(ctx, txFromModel(v)); err != nil {
+			return err
+		}
 		r.transactions = append(r.transactions, v)
-		r.saveTransactionToCSV(v)
+		if err := r.logChange(ctx, "transaction", "create", v.GetID(), txFromModel(v)); err != nil {
+			return err
+		}
 		fmt.Println("Добавлена Transaction")
 	default:
-		fmt.Println("Неизвестный тип")
+		return fmt.Errorf("неизвестный тип сущности")
 	}
+
+	return nil
 }
 
 func (r *Repository) GetOrders() []model.Order {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.orders
+	return append([]model.Order(nil), r.orders...)
 }
 
 func (r *Repository) GetTransactions() []model.Transaction {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.transactions
+	return append([]model.Transaction(nil), r.transactions...)
 }
 
 func (r *Repository) GetOrderByID(id int) *model.Order {
@@ -87,12 +194,23 @@ func (r *Repository) UpdateOrder(id int, order model.Order) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
+	res, err := r.ordersColl.ReplaceOne(ctx, bson.M{"id": id}, orderFromModel(order))
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return fmt.Errorf("заказ с id %d не найден", id)
+	}
+
 	for i := range r.orders {
 		if r.orders[i].GetID() == id {
 			r.orders[i] = order
-			return r.saveAllOrdersToCSV()
+			return r.logChange(ctx, "order", "update", id, orderFromModel(order))
 		}
 	}
+
 	return fmt.Errorf("заказ с id %d не найден", id)
 }
 
@@ -100,12 +218,23 @@ func (r *Repository) UpdateTransaction(id int, tx model.Transaction) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
+	res, err := r.txColl.ReplaceOne(ctx, bson.M{"id": id}, txFromModel(tx))
+	if err != nil {
+		return err
+	}
+	if res.MatchedCount == 0 {
+		return fmt.Errorf("транзакция с id %d не найдена", id)
+	}
+
 	for i := range r.transactions {
 		if r.transactions[i].GetID() == id {
 			r.transactions[i] = tx
-			return r.saveAllTransactionsToCSV()
+			return r.logChange(ctx, "transaction", "update", id, txFromModel(tx))
 		}
 	}
+
 	return fmt.Errorf("транзакция с id %d не найдена", id)
 }
 
@@ -113,12 +242,23 @@ func (r *Repository) DeleteOrder(id int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
+	res, err := r.ordersColl.DeleteOne(ctx, bson.M{"id": id})
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return fmt.Errorf("заказ с id %d не найден", id)
+	}
+
 	for i := range r.orders {
 		if r.orders[i].GetID() == id {
 			r.orders = append(r.orders[:i], r.orders[i+1:]...)
-			return r.saveAllOrdersToCSV()
+			return r.logChange(ctx, "order", "delete", id, map[string]int{"id": id})
 		}
 	}
+
 	return fmt.Errorf("заказ с id %d не найден", id)
 }
 
@@ -126,242 +266,165 @@ func (r *Repository) DeleteTransaction(id int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
+	res, err := r.txColl.DeleteOne(ctx, bson.M{"id": id})
+	if err != nil {
+		return err
+	}
+	if res.DeletedCount == 0 {
+		return fmt.Errorf("транзакция с id %d не найдена", id)
+	}
+
 	for i := range r.transactions {
 		if r.transactions[i].GetID() == id {
 			r.transactions = append(r.transactions[:i], r.transactions[i+1:]...)
-			return r.saveAllTransactionsToCSV()
+			return r.logChange(ctx, "transaction", "delete", id, map[string]int{"id": id})
 		}
 	}
+
 	return fmt.Errorf("транзакция с id %d не найдена", id)
-}
-
-func (r *Repository) saveAllOrdersToCSV() error {
-	file, err := os.Create(r.ordersFile)
-	if err != nil {
-		return fmt.Errorf("ошибка создания файла orders.csv: %v", err)
-	}
-	defer file.Close()
-
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
-	writer.Write([]string{"id", "status", "amount"})
-
-	for _, order := range r.orders {
-		statusStr := "false"
-		if order.GetStatus() {
-			statusStr = "true"
-		}
-
-		writer.Write([]string{
-			strconv.Itoa(order.GetID()),
-			statusStr,
-			strconv.Itoa(order.GetAmount()),
-		})
-	}
-
-	return nil
-}
-
-func (r *Repository) saveAllTransactionsToCSV() error {
-	file, err := os.Create(r.txFile)
-	if err != nil {
-		return fmt.Errorf("ошибка создания файла transactions.csv: %v", err)
-	}
-	defer file.Close()
-
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
-	writer.Write([]string{"id", "amount", "date"})
-
-	for _, tx := range r.transactions {
-		writer.Write([]string{
-			strconv.Itoa(tx.GetID()),
-			strconv.Itoa(tx.GetAmount()),
-			tx.GetDate(),
-		})
-	}
-
-	return nil
-}
-
-func (r *Repository) saveOrderToCSV(order model.Order) {
-	fileExists := true
-	if _, err := os.Stat(r.ordersFile); os.IsNotExist(err) {
-		fileExists = false
-	}
-
-	file, err := os.OpenFile(r.ordersFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Printf("Ошибка открытия файла orders.csv: %v\n", err)
-		return
-	}
-	defer file.Close()
-
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
-	if !fileExists {
-		writer.Write([]string{"id", "status", "amount"})
-	}
-
-	statusStr := "false"
-	if order.GetStatus() {
-		statusStr = "true"
-	}
-
-	writer.Write([]string{
-		strconv.Itoa(order.GetID()),
-		statusStr,
-		strconv.Itoa(order.GetAmount()),
-	})
-}
-
-func (r *Repository) saveTransactionToCSV(tx model.Transaction) {
-	fileExists := true
-	if _, err := os.Stat(r.txFile); os.IsNotExist(err) {
-		fileExists = false
-	}
-
-	file, err := os.OpenFile(r.txFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Printf("Ошибка открытия файла transactions.csv: %v\n", err)
-		return
-	}
-	defer file.Close()
-
-	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
-	if !fileExists {
-		writer.Write([]string{"id", "amount", "date"})
-	}
-
-	writer.Write([]string{
-		strconv.Itoa(tx.GetID()),
-		strconv.Itoa(tx.GetAmount()),
-		tx.GetDate(),
-	})
 }
 
 func (r *Repository) LoadData() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if err := r.loadOrdersFromCSV(); err != nil {
+	if err := r.loadOrdersFromMongo(); err != nil {
 		return fmt.Errorf("ошибка загрузки заказов: %v", err)
 	}
 
-	if err := r.loadTransactionsFromCSV(); err != nil {
+	if err := r.loadTransactionsFromMongo(); err != nil {
 		return fmt.Errorf("ошибка загрузки транзакций: %v", err)
 	}
 
 	return nil
 }
 
-func (r *Repository) loadOrdersFromCSV() error {
-	file, err := os.Open(r.ordersFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	defer file.Close()
+func (r *Repository) loadOrdersFromMongo() error {
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
 
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
+	cursor, err := r.ordersColl.Find(ctx, bson.D{})
 	if err != nil {
 		return err
 	}
-
-	if len(records) <= 1 {
-		return nil
-	}
+	defer cursor.Close(ctx)
 
 	var orders []model.Order
-	for i := 1; i < len(records); i++ {
-		record := records[i]
-		if len(record) != 3 {
-			continue
+	for cursor.Next(ctx) {
+		var doc orderDoc
+		if err := cursor.Decode(&doc); err != nil {
+			return err
 		}
-
-		id, err := strconv.Atoi(record[0])
-		if err != nil {
-			continue
-		}
-
-		status, err := strconv.ParseBool(record[1])
-		if err != nil {
-			continue
-		}
-
-		amount, err := strconv.Atoi(record[2])
-		if err != nil {
-			continue
-		}
-
-		if id < 0 || amount <= 0 {
-			continue
-		}
-		order := model.NewOrder(id, status, amount)
+		order := model.NewOrder(doc.ID, doc.Status, doc.Amount)
 		orders = append(orders, order)
+	}
+	if err := cursor.Err(); err != nil {
+		return err
 	}
 
 	r.orders = orders
 	return nil
 }
 
-func (r *Repository) loadTransactionsFromCSV() error {
-	file, err := os.Open(r.txFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	defer file.Close()
+func (r *Repository) loadTransactionsFromMongo() error {
+	ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+	defer cancel()
 
-	reader := csv.NewReader(file)
-	records, err := reader.ReadAll()
+	cursor, err := r.txColl.Find(ctx, bson.D{})
 	if err != nil {
 		return err
 	}
-
-	if len(records) <= 1 {
-		return nil
-	}
+	defer cursor.Close(ctx)
 
 	var transactions []model.Transaction
-	for i := 1; i < len(records); i++ {
-		record := records[i]
-		if len(record) != 3 {
-			continue
+	for cursor.Next(ctx) {
+		var doc transactionDoc
+		if err := cursor.Decode(&doc); err != nil {
+			return err
 		}
-
-		id, err := strconv.Atoi(record[0])
-		if err != nil {
-			continue
-		}
-
-		amount, err := strconv.Atoi(record[1])
-		if err != nil {
-			continue
-		}
-
-		date := record[2]
-		if date == "" {
-			continue
-		}
-
-		if id < 0 || amount <= 0 {
-			continue
-		}
-		tx := model.NewTransaction(id, amount, date)
+		tx := model.NewTransaction(doc.ID, doc.Amount, doc.Date)
 		transactions = append(transactions, tx)
+	}
+	if err := cursor.Err(); err != nil {
+		return err
 	}
 
 	r.transactions = transactions
 	return nil
+}
+
+func (r *Repository) ensureIndexes(ctx context.Context) error {
+	orderIndex := mongo.IndexModel{
+		Keys:    bson.D{{Key: "id", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}
+	txIndex := mongo.IndexModel{
+		Keys:    bson.D{{Key: "id", Value: 1}},
+		Options: options.Index().SetUnique(true),
+	}
+
+	if _, err := r.ordersColl.Indexes().CreateOne(ctx, orderIndex); err != nil {
+		return fmt.Errorf("ошибка создания индекса orders.id: %w", err)
+	}
+	if _, err := r.txColl.Indexes().CreateOne(ctx, txIndex); err != nil {
+		return fmt.Errorf("ошибка создания индекса transactions.id: %w", err)
+	}
+	return nil
+}
+
+func (r *Repository) logChange(ctx context.Context, entityType, action string, entityID int, payload interface{}) error {
+	record := historyRecord{
+		EntityType: entityType,
+		Action:     action,
+		EntityID:   entityID,
+		Payload:    payload,
+		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),
+	}
+
+	data, err := json.Marshal(record)
+	if err != nil {
+		return err
+	}
+
+	key := fmt.Sprintf("history:%s:%d:%d", entityType, entityID, time.Now().UnixNano())
+	return r.redisClient.Set(ctx, key, data, r.historyTTL).Err()
+}
+
+func orderFromModel(o model.Order) orderDoc {
+	return orderDoc{
+		ID:     o.GetID(),
+		Status: o.GetStatus(),
+		Amount: o.GetAmount(),
+	}
+}
+
+func txFromModel(t model.Transaction) transactionDoc {
+	return transactionDoc{
+		ID:     t.GetID(),
+		Amount: t.GetAmount(),
+		Date:   t.GetDate(),
+	}
+}
+
+func getenv(key, fallback string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
+func getHistoryTTL() time.Duration {
+	ttlRaw := getenv("REDIS_HISTORY_TTL_SECONDS", "")
+	if ttlRaw == "" {
+		return defaultHistoryTTL
+	}
+
+	seconds, err := strconv.Atoi(ttlRaw)
+	if err != nil || seconds <= 0 {
+		return defaultHistoryTTL
+	}
+	return time.Duration(seconds) * time.Second
 }

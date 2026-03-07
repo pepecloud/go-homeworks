@@ -19,7 +19,7 @@ var (
 )
 
 type Repository interface {
-	AddEntity(entity interface{})
+	AddEntity(entity interface{}) error
 	GetOrders() []model.Order
 	GetTransactions() []model.Transaction
 	GetOrderByID(id int) *model.Order
@@ -54,7 +54,9 @@ func (s *Service) CreateOrder(id int, status bool, amount int) (model.Order, err
 		return model.Order{}, ErrInvalidOrderData
 	}
 
-	s.repo.AddEntity(order)
+	if err := s.repo.AddEntity(order); err != nil {
+		return model.Order{}, err
+	}
 	return order, nil
 }
 
@@ -77,7 +79,9 @@ func (s *Service) CreateTransaction(id, amount int, date string) (model.Transact
 		return model.Transaction{}, ErrInvalidTxData
 	}
 
-	s.repo.AddEntity(tx)
+	if err := s.repo.AddEntity(tx); err != nil {
+		return model.Transaction{}, err
+	}
 	return tx, nil
 }
 

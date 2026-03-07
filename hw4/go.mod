@@ -7,7 +7,9 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
+	github.com/redis/go-redis/v9 v9.6.1
 	github.com/swaggo/http-swagger v1.3.4
+	go.mongodb.org/mongo-driver v1.17.1
 	google.golang.org/grpc v1.67.1
 	google.golang.org/protobuf v1.35.1
 )

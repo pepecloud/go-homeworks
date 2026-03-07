@@ -13,13 +13,14 @@ type fakeRepo struct {
 	transactions []model.Transaction
 }
 
-func (f *fakeRepo) AddEntity(entity interface{}) {
+func (f *fakeRepo) AddEntity(entity interface{}) error {
 	switch v := entity.(type) {
 	case model.Order:
 		f.orders = append(f.orders, v)
 	case model.Transaction:
 		f.transactions = append(f.transactions, v)
 	}
+	return nil
 }
 
 func (f *fakeRepo) GetOrders() []model.Order { return f.orders }
