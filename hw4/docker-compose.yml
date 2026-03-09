@@ -1,27 +1,18 @@
 version: "3.9"
 
 services:
-  mongo:
-    image: mongo:7
-    container_name: hw4-mongo
+  postgres:
+    image: postgres:16
+    container_name: hw4-postgres
     restart: unless-stopped
     ports:
-      - "27017:27017"
+      - "5432:5432"
     environment:
-      MONGO_INITDB_DATABASE: itemsdb
+      POSTGRES_DB: itemsdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
     volumes:
-      - mongo_data:/data/db
-
-  redis:
-    image: redis:7
-    container_name: hw4-redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis_data:/data
+      - postgres_data:/var/lib/postgresql/data
 
 volumes:
-  mongo_data:
-  redis_data:
+  postgres_data:
