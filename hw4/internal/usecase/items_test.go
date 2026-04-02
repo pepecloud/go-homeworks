@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/pepecloud/go-homeworks/hw4/internal/model"
+	"github.com/pepecloud/go-homeworks/hw4/internal/repository"
 	"github.com/pepecloud/go-homeworks/hw4/internal/usecase"
 )
 
@@ -23,26 +24,26 @@ func (f *fakeRepo) AddEntity(entity interface{}) error {
 	return nil
 }
 
-func (f *fakeRepo) GetOrders() []model.Order { return f.orders }
+func (f *fakeRepo) GetOrders() ([]model.Order, error) { return f.orders, nil }
 
-func (f *fakeRepo) GetTransactions() []model.Transaction { return f.transactions }
+func (f *fakeRepo) GetTransactions() ([]model.Transaction, error) { return f.transactions, nil }
 
-func (f *fakeRepo) GetOrderByID(id int) *model.Order {
+func (f *fakeRepo) GetOrderByID(id int) (*model.Order, error) {
 	for i := range f.orders {
 		if f.orders[i].GetID() == id {
-			return &f.orders[i]
+			return &f.orders[i], nil
 		}
 	}
-	return nil
+	return nil, repository.ErrNotFound
 }
 
-func (f *fakeRepo) GetTransactionByID(id int) *model.Transaction {
+func (f *fakeRepo) GetTransactionByID(id int) (*model.Transaction, error) {
 	for i := range f.transactions {
 		if f.transactions[i].GetID() == id {
-			return &f.transactions[i]
+			return &f.transactions[i], nil
 		}
 	}
-	return nil
+	return nil, repository.ErrNotFound
 }
 
 func (f *fakeRepo) UpdateOrder(id int, order model.Order) error {
@@ -52,7 +53,7 @@ func (f *fakeRepo) UpdateOrder(id int, order model.Order) error {
 			return nil
 		}
 	}
-	return errors.New("not found")
+	return repository.ErrNotFound
 }
 
 func (f *fakeRepo) UpdateTransaction(id int, tx model.Transaction) error {
@@ -62,7 +63,7 @@ func (f *fakeRepo) UpdateTransaction(id int, tx model.Transaction) error {
 			return nil
 		}
 	}
-	return errors.New("not found")
+	return repository.ErrNotFound
 }
 
 func (f *fakeRepo) DeleteOrder(id int) error {
@@ -72,7 +73,7 @@ func (f *fakeRepo) DeleteOrder(id int) error {
 			return nil
 		}
 	}
-	return errors.New("not found")
+	return repository.ErrNotFound
 }
 
 func (f *fakeRepo) DeleteTransaction(id int) error {
@@ -82,7 +83,7 @@ func (f *fakeRepo) DeleteTransaction(id int) error {
 			return nil
 		}
 	}
-	return errors.New("not found")
+	return repository.ErrNotFound
 }
 
 func TestServiceCreateOrder(t *testing.T) {
@@ -500,7 +501,10 @@ func TestServiceGetDeleteAndList(t *testing.T) {
 		t.Fatalf("expected not found, got %v", err)
 	}
 
-	orders, txs := svc.ListItems()
+	orders, txs, err := svc.ListItems()
+	if err != nil {
+		t.Fatalf("expected list success, got %v", err)
+	}
 	if len(orders) != 0 || len(txs) != 0 {
 		t.Fatalf("expected empty repo after deletions, got %d orders and %d txs", len(orders), len(txs))
 	}

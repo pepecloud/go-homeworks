@@ -123,7 +123,7 @@ func (s *Server) CreateOrder(ctx context.Context, req *pb.CreateOrderRequest) (*
 		case errors.Is(err, usecase.ErrOrderExists):
 			return nil, status.Error(codes.AlreadyExists, err.Error())
 		default:
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return nil, status.Error(codes.Internal, "ошибка создания заказа")
 		}
 	}
 
@@ -153,7 +153,7 @@ func (s *Server) UpdateOrder(ctx context.Context, req *pb.UpdateOrderRequest) (*
 		case errors.Is(err, usecase.ErrEntityNotFound):
 			return nil, status.Error(codes.NotFound, err.Error())
 		default:
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return nil, status.Error(codes.Internal, "ошибка обновления заказа")
 		}
 	}
 
@@ -170,7 +170,10 @@ func (s *Server) DeleteOrder(ctx context.Context, req *pb.DeleteOrderRequest) (*
 func (s *Server) GetOrder(ctx context.Context, req *pb.OrderIdRequest) (*pb.GetOrderResponse, error) {
 	order, err := s.items.GetOrder(int(req.GetId()))
 	if err != nil {
-		return nil, status.Error(codes.NotFound, "заказ не найден")
+		if errors.Is(err, usecase.ErrEntityNotFound) {
+			return nil, status.Error(codes.NotFound, "заказ не найден")
+		}
+		return nil, status.Error(codes.Internal, "ошибка получения заказа")
 	}
 	return &pb.GetOrderResponse{
 		Order: &pb.Order{
@@ -182,7 +185,10 @@ func (s *Server) GetOrder(ctx context.Context, req *pb.OrderIdRequest) (*pb.GetO
 }
 
 func (s *Server) ListOrders(ctx context.Context, _ *pb.ListOrdersRequest) (*pb.ListOrdersResponse, error) {
-	orders, _ := s.items.ListItems()
+	orders, _, err := s.items.ListItems()
+	if err != nil {
+		return nil, status.Error(codes.Internal, "ошибка получения заказов")
+	}
 	resp := &pb.ListOrdersResponse{
 		Orders: make([]*pb.Order, 0, len(orders)),
 	}
@@ -218,7 +224,7 @@ func (s *Server) CreateTransaction(ctx context.Context, req *pb.CreateTransactio
 		case errors.Is(err, usecase.ErrTransactionExists):
 			return nil, status.Error(codes.AlreadyExists, err.Error())
 		default:
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return nil, status.Error(codes.Internal, "ошибка создания транзакции")
 		}
 	}
 
@@ -251,7 +257,7 @@ func (s *Server) UpdateTransaction(ctx context.Context, req *pb.UpdateTransactio
 		case errors.Is(err, usecase.ErrEntityNotFound):
 			return nil, status.Error(codes.NotFound, err.Error())
 		default:
-			return nil, status.Error(codes.InvalidArgument, err.Error())
+			return nil, status.Error(codes.Internal, "ошибка обновления транзакции")
 		}
 	}
 
@@ -268,7 +274,10 @@ func (s *Server) DeleteTransaction(ctx context.Context, req *pb.DeleteTransactio
 func (s *Server) GetTransaction(ctx context.Context, req *pb.TransactionIdRequest) (*pb.GetTransactionResponse, error) {
 	tx, err := s.items.GetTransaction(int(req.GetId()))
 	if err != nil {
-		return nil, status.Error(codes.NotFound, "транзакция не найдена")
+		if errors.Is(err, usecase.ErrEntityNotFound) {
+			return nil, status.Error(codes.NotFound, "транзакция не найдена")
+		}
+		return nil, status.Error(codes.Internal, "ошибка получения транзакции")
 	}
 	return &pb.GetTransactionResponse{
 		Transaction: &pb.Transaction{
@@ -280,7 +289,10 @@ func (s *Server) GetTransaction(ctx context.Context, req *pb.TransactionIdReques
 }
 
 func (s *Server) ListTransactions(ctx context.Context, _ *pb.ListTransactionsRequest) (*pb.ListTransactionsResponse, error) {
-	_, txs := s.items.ListItems()
+	_, txs, err := s.items.ListItems()
+	if err != nil {
+		return nil, status.Error(codes.Internal, "ошибка получения транзакций")
+	}
 	resp := &pb.ListTransactionsResponse{
 		Transactions: make([]*pb.Transaction, 0, len(txs)),
 	}

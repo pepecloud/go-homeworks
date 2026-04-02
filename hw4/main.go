@@ -141,6 +141,17 @@ func main() {
 	}
 
 	fmt.Println("\n=== Итого в репозитории ===")
-	fmt.Printf("Всего заказов: %d\n", len(repo.GetOrders()))
-	fmt.Printf("Всего транзакций: %d\n", len(repo.GetTransactions()))
+	orders, err := repo.GetOrders()
+	if err != nil {
+		fmt.Printf("Ошибка чтения заказов: %v\n", err)
+	} else {
+		fmt.Printf("Всего заказов: %d\n", len(orders))
+	}
+
+	transactions, err := repo.GetTransactions()
+	if err != nil {
+		fmt.Printf("Ошибка чтения транзакций: %v\n", err)
+	} else {
+		fmt.Printf("Всего транзакций: %d\n", len(transactions))
+	}
 }

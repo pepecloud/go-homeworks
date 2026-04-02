@@ -3,14 +3,11 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
-	"github.com/golang-migrate/migrate/v4"
-	"github.com/golang-migrate/migrate/v4/database/postgres"
-	"github.com/golang-migrate/migrate/v4/source/iofs"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/pepecloud/go-homeworks/hw4/internal/model"
 )
@@ -19,8 +16,7 @@ const (
 	defaultPostgresDSN = "postgres://postgres:postgres@localhost:5432/itemsdb?sslmode=disable"
 )
 
-//go:embed migrations/*.sql
-var migrationsFS embed.FS
+var ErrNotFound = errors.New("entity not found")
 
 type historyRecord struct {
 	EntityType string          `json:"entity_type"`
@@ -38,15 +34,11 @@ func NewRepository(ctx context.Context) (*Repository, error) {
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("ошибка подключения к PostgreSQL: %w", err)
+		return nil, fmt.Errorf("connect to PostgreSQL: %w", err)
 	}
 	if err := db.PingContext(ctx); err != nil {
-		return nil, fmt.Errorf("ошибка ping PostgreSQL: %w", err)
-	}
-
-	if err := runMigrations(db); err != nil {
 		_ = db.Close()
-		return nil, err
+		return nil, fmt.Errorf("ping PostgreSQL: %w", err)
 	}
 
 	return &Repository{db: db}, nil
@@ -57,7 +49,7 @@ func (r *Repository) Close(_ context.Context) error {
 		return nil
 	}
 	if err := r.db.Close(); err != nil {
-		return fmt.Errorf("ошибка закрытия PostgreSQL: %w", err)
+		return fmt.Errorf("close PostgreSQL: %w", err)
 	}
 	return nil
 }
@@ -69,7 +61,7 @@ func (r *Repository) AddEntity(entity interface{}) error {
 	case model.Transaction:
 		return r.createTransactionWithHistory(v)
 	default:
-		return fmt.Errorf("неизвестный тип сущности")
+		return fmt.Errorf("unknown entity type")
 	}
 }
 
@@ -135,10 +127,10 @@ func (r *Repository) createTransactionWithHistory(tr model.Transaction) error {
 	return tx.Commit()
 }
 
-func (r *Repository) GetOrders() []model.Order {
+func (r *Repository) GetOrders() ([]model.Order, error) {
 	rows, err := r.db.Query(`SELECT id, status, amount FROM orders ORDER BY id`)
 	if err != nil {
-		return []model.Order{}
+		return nil, fmt.Errorf("query orders: %w", err)
 	}
 	defer rows.Close()
 
@@ -147,17 +139,20 @@ func (r *Repository) GetOrders() []model.Order {
 		var id, amount int
 		var status bool
 		if err := rows.Scan(&id, &status, &amount); err != nil {
-			return []model.Order{}
+			return nil, fmt.Errorf("scan order: %w", err)
 		}
 		orders = append(orders, model.NewOrder(id, status, amount))
 	}
-	return orders
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate orders: %w", err)
+	}
+	return orders, nil
 }
 
-func (r *Repository) GetTransactions() []model.Transaction {
+func (r *Repository) GetTransactions() ([]model.Transaction, error) {
 	rows, err := r.db.Query(`SELECT id, amount, date FROM transactions ORDER BY id`)
 	if err != nil {
-		return []model.Transaction{}
+		return nil, fmt.Errorf("query transactions: %w", err)
 	}
 	defer rows.Close()
 
@@ -166,31 +161,40 @@ func (r *Repository) GetTransactions() []model.Transaction {
 		var id, amount int
 		var date string
 		if err := rows.Scan(&id, &amount, &date); err != nil {
-			return []model.Transaction{}
+			return nil, fmt.Errorf("scan transaction: %w", err)
 		}
 		transactions = append(transactions, model.NewTransaction(id, amount, date))
 	}
-	return transactions
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate transactions: %w", err)
+	}
+	return transactions, nil
 }
 
-func (r *Repository) GetOrderByID(id int) *model.Order {
+func (r *Repository) GetOrderByID(id int) (*model.Order, error) {
 	var amount int
 	var status bool
 	if err := r.db.QueryRow(`SELECT status, amount FROM orders WHERE id = $1`, id).Scan(&status, &amount); err != nil {
-		return nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("query order by id=%d: %w", id, err)
 	}
 	order := model.NewOrder(id, status, amount)
-	return &order
+	return &order, nil
 }
 
-func (r *Repository) GetTransactionByID(id int) *model.Transaction {
+func (r *Repository) GetTransactionByID(id int) (*model.Transaction, error) {
 	var amount int
 	var date string
 	if err := r.db.QueryRow(`SELECT amount, date FROM transactions WHERE id = $1`, id).Scan(&amount, &date); err != nil {
-		return nil
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("query transaction by id=%d: %w", id, err)
 	}
 	tr := model.NewTransaction(id, amount, date)
-	return &tr
+	return &tr, nil
 }
 
 func (r *Repository) UpdateOrder(id int, order model.Order) error {
@@ -208,8 +212,11 @@ func (r *Repository) UpdateOrder(id int, order model.Order) error {
 		return err
 	}
 	affected, err := res.RowsAffected()
-	if err != nil || affected == 0 {
-		return fmt.Errorf("заказ с id %d не найден", id)
+	if err != nil {
+		return fmt.Errorf("affected rows for order id=%d: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: order id %d", ErrNotFound, id)
 	}
 
 	payload, err := json.Marshal(map[string]interface{}{
@@ -241,8 +248,11 @@ func (r *Repository) UpdateTransaction(id int, transaction model.Transaction) er
 		return err
 	}
 	affected, err := res.RowsAffected()
-	if err != nil || affected == 0 {
-		return fmt.Errorf("транзакция с id %d не найдена", id)
+	if err != nil {
+		return fmt.Errorf("affected rows for transaction id=%d: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: transaction id %d", ErrNotFound, id)
 	}
 
 	payload, err := json.Marshal(map[string]interface{}{
@@ -271,8 +281,11 @@ func (r *Repository) DeleteOrder(id int) error {
 		return err
 	}
 	affected, err := res.RowsAffected()
-	if err != nil || affected == 0 {
-		return fmt.Errorf("заказ с id %d не найден", id)
+	if err != nil {
+		return fmt.Errorf("affected rows for order id=%d: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: order id %d", ErrNotFound, id)
 	}
 
 	payload, err := json.Marshal(map[string]int{"id": id})
@@ -297,8 +310,11 @@ func (r *Repository) DeleteTransaction(id int) error {
 		return err
 	}
 	affected, err := res.RowsAffected()
-	if err != nil || affected == 0 {
-		return fmt.Errorf("транзакция с id %d не найдена", id)
+	if err != nil {
+		return fmt.Errorf("affected rows for transaction id=%d: %w", id, err)
+	}
+	if affected == 0 {
+		return fmt.Errorf("%w: transaction id %d", ErrNotFound, id)
 	}
 
 	payload, err := json.Marshal(map[string]int{"id": id})
@@ -312,7 +328,6 @@ func (r *Repository) DeleteTransaction(id int) error {
 }
 
 func (r *Repository) LoadData() error {
-	// Данные уже находятся в PostgreSQL, отдельная загрузка не нужна.
 	return nil
 }
 
@@ -329,28 +344,6 @@ func (r *Repository) insertHistoryTx(tx *sql.Tx, entityType, action string, enti
 		record.EntityType, record.Action, record.EntityID, record.Payload,
 	)
 	return err
-}
-
-func runMigrations(db *sql.DB) error {
-	driver, err := postgres.WithInstance(db, &postgres.Config{})
-	if err != nil {
-		return fmt.Errorf("ошибка инициализации драйвера миграций: %w", err)
-	}
-
-	src, err := iofs.New(migrationsFS, "migrations")
-	if err != nil {
-		return fmt.Errorf("ошибка загрузки migration-файлов: %w", err)
-	}
-
-	m, err := migrate.NewWithInstance("iofs", src, "postgres", driver)
-	if err != nil {
-		return fmt.Errorf("ошибка инициализации мигратора: %w", err)
-	}
-
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		return fmt.Errorf("ошибка применения миграций: %w", err)
-	}
-	return nil
 }
 
 func getenv(key, fallback string) string {

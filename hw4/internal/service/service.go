@@ -96,8 +96,16 @@ func RunLogger(ctx context.Context, repo *repository.Repository) {
 	defer ticker.Stop()
 
 	// Логгер будет выводить только те сущности, которые появились после запуска.
-	orders := repo.GetOrders()
-	transactions := repo.GetTransactions()
+	orders, err := repo.GetOrders()
+	if err != nil {
+		fmt.Printf("[LOGGER] Ошибка чтения заказов: %v\n", err)
+		orders = []model.Order{}
+	}
+	transactions, err := repo.GetTransactions()
+	if err != nil {
+		fmt.Printf("[LOGGER] Ошибка чтения транзакций: %v\n", err)
+		transactions = []model.Transaction{}
+	}
 
 	prevOrderCount := len(orders)
 	prevTxCount := len(transactions)
@@ -108,7 +116,11 @@ func RunLogger(ctx context.Context, repo *repository.Repository) {
 			fmt.Println("[LOGGER] Получен сигнал завершения, останавливаем логгер")
 			return
 		case <-ticker.C:
-			orders = repo.GetOrders()
+			orders, err = repo.GetOrders()
+			if err != nil {
+				fmt.Printf("[LOGGER] Ошибка чтения заказов: %v\n", err)
+				continue
+			}
 			currentOrderCount := len(orders)
 
 			if currentOrderCount > prevOrderCount {
@@ -119,7 +131,11 @@ func RunLogger(ctx context.Context, repo *repository.Repository) {
 				prevOrderCount = currentOrderCount
 			}
 
-			transactions = repo.GetTransactions()
+			transactions, err = repo.GetTransactions()
+			if err != nil {
+				fmt.Printf("[LOGGER] Ошибка чтения транзакций: %v\n", err)
+				continue
+			}
 			currentTxCount := len(transactions)
 
 			if currentTxCount > prevTxCount {

@@ -104,7 +104,7 @@ func (h *Handlers) createOrderFromMap(w http.ResponseWriter, raw map[string]inte
 		case errors.Is(err, usecase.ErrOrderExists):
 			http.Error(w, "Заказ с таким ID уже существует", http.StatusConflict)
 		default:
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		}
 		return
 	}
@@ -172,7 +172,7 @@ func (h *Handlers) createTransactionFromMap(w http.ResponseWriter, raw map[strin
 		case errors.Is(err, usecase.ErrTransactionExists):
 			http.Error(w, "Транзакция с таким ID уже существует", http.StatusConflict)
 		default:
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		}
 		return
 	}
@@ -217,13 +217,15 @@ func (h *Handlers) UpdateItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Проверяем, существует ли Order или Transaction с таким ID
-	order, _ := h.items.GetOrder(id)
-	tx, _ := h.items.GetTransaction(id)
+	order, orderErr := h.items.GetOrder(id)
+	tx, txErr := h.items.GetTransaction(id)
 
 	if order != nil {
 		h.updateOrderFromMap(w, id, raw)
 	} else if tx != nil {
 		h.updateTransactionFromMap(w, id, raw)
+	} else if (orderErr != nil && !errors.Is(orderErr, usecase.ErrEntityNotFound)) || (txErr != nil && !errors.Is(txErr, usecase.ErrEntityNotFound)) {
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 	} else {
 		http.Error(w, "Сущность с таким ID не найдена", http.StatusNotFound)
 		return
@@ -289,7 +291,7 @@ func (h *Handlers) updateOrderFromMap(w http.ResponseWriter, id int, raw map[str
 		case errors.Is(err, usecase.ErrEntityNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
 		default:
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		}
 		return
 	}
@@ -361,7 +363,7 @@ func (h *Handlers) updateTransactionFromMap(w http.ResponseWriter, id int, raw m
 		case errors.Is(err, usecase.ErrEntityNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
 		default:
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		}
 		return
 	}
@@ -379,7 +381,11 @@ func (h *Handlers) updateTransactionFromMap(w http.ResponseWriter, id int, raw m
 // @Success      200   {array}   object
 // @Router       /api/items [get]
 func (h *Handlers) GetItems(w http.ResponseWriter, r *http.Request) {
-	orders, transactions := h.items.ListItems()
+	orders, transactions, err := h.items.ListItems()
+	if err != nil {
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
 
 	// Объединяем все сущности в один массив
 	items := make([]interface{}, 0, len(orders)+len(transactions))
@@ -425,7 +431,8 @@ func (h *Handlers) GetItem(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Проверяем сначала Order, потом Transaction
-	if order, _ := h.items.GetOrder(id); order != nil {
+	order, err := h.items.GetOrder(id)
+	if err == nil && order != nil {
 		dto := OrderDTO{
 			ID:     order.GetID(),
 			Status: order.GetStatus(),
@@ -436,7 +443,13 @@ func (h *Handlers) GetItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if tx, _ := h.items.GetTransaction(id); tx != nil {
+	if err != nil && !errors.Is(err, usecase.ErrEntityNotFound) {
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
+		return
+	}
+
+	tx, err := h.items.GetTransaction(id)
+	if err == nil && tx != nil {
 		dto := TransactionDTO{
 			ID:     tx.GetID(),
 			Amount: tx.GetAmount(),
@@ -444,6 +457,10 @@ func (h *Handlers) GetItem(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(dto)
+		return
+	}
+	if err != nil && !errors.Is(err, usecase.ErrEntityNotFound) {
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		return
 	}
 
@@ -475,6 +492,9 @@ func (h *Handlers) DeleteItem(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.items.DeleteItem(id); err == nil {
 		w.WriteHeader(http.StatusNoContent)
+		return
+	} else if !errors.Is(err, usecase.ErrEntityNotFound) {
+		http.Error(w, "Внутренняя ошибка сервера", http.StatusInternalServerError)
 		return
 	}
 

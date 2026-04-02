@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/pepecloud/go-homeworks/hw4/internal/model"
+	"github.com/pepecloud/go-homeworks/hw4/internal/repository"
 )
 
 var (
@@ -20,10 +21,10 @@ var (
 
 type Repository interface {
 	AddEntity(entity interface{}) error
-	GetOrders() []model.Order
-	GetTransactions() []model.Transaction
-	GetOrderByID(id int) *model.Order
-	GetTransactionByID(id int) *model.Transaction
+	GetOrders() ([]model.Order, error)
+	GetTransactions() ([]model.Transaction, error)
+	GetOrderByID(id int) (*model.Order, error)
+	GetTransactionByID(id int) (*model.Transaction, error)
 	UpdateOrder(id int, order model.Order) error
 	UpdateTransaction(id int, tx model.Transaction) error
 	DeleteOrder(id int) error
@@ -45,7 +46,12 @@ func (s *Service) CreateOrder(id int, status bool, amount int) (model.Order, err
 	if amount <= 0 {
 		return model.Order{}, ErrInvalidAmount
 	}
-	if existing := s.repo.GetOrderByID(id); existing != nil {
+
+	existing, err := s.repo.GetOrderByID(id)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return model.Order{}, err
+	}
+	if existing != nil {
 		return model.Order{}, ErrOrderExists
 	}
 
@@ -70,7 +76,12 @@ func (s *Service) CreateTransaction(id, amount int, date string) (model.Transact
 	if date == "" {
 		return model.Transaction{}, ErrInvalidDate
 	}
-	if existing := s.repo.GetTransactionByID(id); existing != nil {
+
+	existing, err := s.repo.GetTransactionByID(id)
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return model.Transaction{}, err
+	}
+	if existing != nil {
 		return model.Transaction{}, ErrTransactionExists
 	}
 
@@ -102,7 +113,10 @@ func (s *Service) UpdateOrder(pathID, payloadID int, status bool, amount int) (m
 	}
 
 	if err := s.repo.UpdateOrder(pathID, order); err != nil {
-		return model.Order{}, ErrEntityNotFound
+		if errors.Is(err, repository.ErrNotFound) {
+			return model.Order{}, ErrEntityNotFound
+		}
+		return model.Order{}, err
 	}
 	return order, nil
 }
@@ -127,21 +141,30 @@ func (s *Service) UpdateTransaction(pathID, payloadID, amount int, date string) 
 	}
 
 	if err := s.repo.UpdateTransaction(pathID, tx); err != nil {
-		return model.Transaction{}, ErrEntityNotFound
+		if errors.Is(err, repository.ErrNotFound) {
+			return model.Transaction{}, ErrEntityNotFound
+		}
+		return model.Transaction{}, err
 	}
 	return tx, nil
 }
 
 func (s *Service) DeleteOrder(id int) error {
 	if err := s.repo.DeleteOrder(id); err != nil {
-		return ErrEntityNotFound
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrEntityNotFound
+		}
+		return err
 	}
 	return nil
 }
 
 func (s *Service) DeleteTransaction(id int) error {
 	if err := s.repo.DeleteTransaction(id); err != nil {
-		return ErrEntityNotFound
+		if errors.Is(err, repository.ErrNotFound) {
+			return ErrEntityNotFound
+		}
+		return err
 	}
 	return nil
 }
@@ -149,39 +172,71 @@ func (s *Service) DeleteTransaction(id int) error {
 func (s *Service) DeleteItem(id int) error {
 	if err := s.repo.DeleteOrder(id); err == nil {
 		return nil
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return err
 	}
+
 	if err := s.repo.DeleteTransaction(id); err == nil {
 		return nil
+	} else if !errors.Is(err, repository.ErrNotFound) {
+		return err
 	}
+
 	return ErrEntityNotFound
 }
 
 func (s *Service) GetOrder(id int) (*model.Order, error) {
-	order := s.repo.GetOrderByID(id)
-	if order == nil {
-		return nil, ErrEntityNotFound
+	order, err := s.repo.GetOrderByID(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrEntityNotFound
+		}
+		return nil, err
 	}
 	return order, nil
 }
 
 func (s *Service) GetTransaction(id int) (*model.Transaction, error) {
-	tx := s.repo.GetTransactionByID(id)
-	if tx == nil {
-		return nil, ErrEntityNotFound
+	tx, err := s.repo.GetTransactionByID(id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			return nil, ErrEntityNotFound
+		}
+		return nil, err
 	}
 	return tx, nil
 }
 
 func (s *Service) GetItem(id int) (interface{}, error) {
-	if order := s.repo.GetOrderByID(id); order != nil {
+	order, err := s.repo.GetOrderByID(id)
+	if err == nil {
 		return *order, nil
 	}
-	if tx := s.repo.GetTransactionByID(id); tx != nil {
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+
+	tx, err := s.repo.GetTransactionByID(id)
+	if err == nil {
 		return *tx, nil
 	}
+	if err != nil && !errors.Is(err, repository.ErrNotFound) {
+		return nil, err
+	}
+
 	return nil, ErrEntityNotFound
 }
 
-func (s *Service) ListItems() ([]model.Order, []model.Transaction) {
-	return s.repo.GetOrders(), s.repo.GetTransactions()
+func (s *Service) ListItems() ([]model.Order, []model.Transaction, error) {
+	orders, err := s.repo.GetOrders()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	transactions, err := s.repo.GetTransactions()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return orders, transactions, nil
 }
